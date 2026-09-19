@@ -10,7 +10,7 @@ deployment-specific pieces.
 | App | Image / source | Exposed | Notes |
 | --- | --- | --- | --- |
 | `pyracms` | `ghcr.io/johndoe6345789/pyracms-frontend@<digest>` | yes | Next.js on :3000. Custom nginx config ([caprover/pyracms-nginx.ejs](caprover/pyracms-nginx.ejs)) sends `/api/` to `pyracms-api`, like `pyracms-cpp-port/nginx.conf`. Custom domain `pyracms.pynguins.xyz` |
-| `pyracms-api` | [api/](api/) | no | Published backend image, minus demo seeding, with the docker CLI replaced by a shim |
+| `pyracms-api` | [api/](api/) | no | Published backend image, minus demo seeding, with the docker CLI replaced by a shim. Runs as uid 10001; persistent volume `pyracms-api-uploads` → `/app/uploads` |
 | `pyracms-runner` | [runner-gateway/](runner-gateway/) | no | The **only** app with `/var/run/docker.sock` |
 | `pyracms-db` | `postgres:15-alpine` | no | Persistent volume `pyracms-db-data` |
 | `pyracms-redis` | `redis:7-alpine`, 128 MB LRU, no persistence | no | Cache only |
@@ -21,7 +21,10 @@ PostgreSQL full-text search (saves ~1 GB RAM on a 1-CPU / 7 GB host).
 Backend environment: `DB_HOST=srv-captain--pyracms-db`, `DB_PORT`, `DB_NAME`,
 `DB_USER`, `DB_PASSWORD`, `JWT_SECRET`, `SERVER_HOST`, `SERVER_PORT=8080`,
 `REDIS_HOST=srv-captain--pyracms-redis`, `REDIS_PORT`, `SEARCH_ENGINE=postgres`,
-`RUNNER_IMAGE_PREFIX=ghcr.io/johndoe6345789/pyracms-runner-`. Secrets live in
+`RUNNER_IMAGE_PREFIX=ghcr.io/johndoe6345789/pyracms-runner-`,
+`PYRACMS_ENV=production` (fatal on a weak `JWT_SECRET`, no demo seeding),
+`CORS_ALLOWED_ORIGINS=https://pyracms.pynguins.xyz,https://pyracms.wardcrew.com`,
+`PUBLIC_BASE_URL=https://pyracms.pynguins.xyz`. Secrets live in
 `~/pyracms-secrets.txt` on the host, not here.
 
 ## Code runner: why a gateway
@@ -38,7 +41,8 @@ public site with open registration, any account can press **Run**, so here:
   allowlisted runner images, and applies the same limits as upstream (no
   network, 512 MB, 1 CPU, 256 pids, read-only root, 256 MB `/tmp`,
   `no-new-privileges`) plus `--cap-drop=ALL`.
-- It kills the **container** at the 25 s deadline. Upstream's
+- It kills the **container** at 27 s (the backend gives up at 30 s and adds
+  the "timed out" message). Upstream's
   `timeout 30 docker run` only kills the CLI, which leaves the container
   running.
 - It runs one sandbox at a time (single-CPU host), with a short queue, and

@@ -76,6 +76,23 @@ server {
         # PyraCMS C++ backend (CapRover app pyracms-api, not exposed as a web
         # app). Mirrors pyracms-cpp-port/nginx.conf: /api/ -> backend,
         # everything else -> this app (the Next.js frontend).
+        # Mirrors pyracms-cpp-port/nginx.conf (security release c167ad0):
+        # 1 MB body limit except 50 MB under /api/ (set per location, since
+        # CapRover's template already sets 500m at server level), no headers:
+        # the frontend and backend already send the security headers (and
+        # no-store on auth). Its limit_req zones need http-level config,
+        # shared by every CapRover app, so rate limiting is left to Cloudflare.
+
+        location /api/auth/ {
+            set $pyracms_api http://srv-captain--pyracms-api:8080;
+            client_max_body_size 1m;
+            proxy_pass $pyracms_api;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+        }
+
         location /api/ {
             set $pyracms_api http://srv-captain--pyracms-api:8080;
             proxy_pass $pyracms_api;
@@ -91,6 +108,7 @@ server {
         }
 
         location / {
+            client_max_body_size 1m;
 
 
     <%

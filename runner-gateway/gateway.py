@@ -27,7 +27,7 @@ PREFIX = os.environ.get("RUNNER_IMAGE_PREFIX", "ghcr.io/johndoe6345789/pyracms-r
 LANGS = ("python", "node", "cpp", "rust", "go", "java", "ruby")
 ALLOWED = {PREFIX + lang for lang in LANGS}
 
-RUN_TIMEOUT = int(os.environ.get("RUN_TIMEOUT", "25"))  # backend gives up at 30s
+RUN_TIMEOUT = int(os.environ.get("RUN_TIMEOUT", "27"))  # backend kills the shim at 30s
 QUEUE_WAIT = int(os.environ.get("QUEUE_WAIT", "4"))
 MAX_CONCURRENT = int(os.environ.get("MAX_CONCURRENT", "1"))
 MAX_CODE = 100 * 1024  # a single argv string is capped at 128KiB by Linux
@@ -58,10 +58,9 @@ def run_sandbox(image, code):
         out, code_ = p.stdout, p.returncode
     except subprocess.TimeoutExpired as e:
         docker("rm", "-f", name)
-        out = (e.stdout or b"") + f"\nExecution timed out ({RUN_TIMEOUT} second limit)".encode()
-        # 137 (killed), not 124: the backend appends its own hard-coded
-        # "timed out (10 second limit)" line whenever it sees 124.
-        code_ = 137
+        # 137 = killed. The backend appends its own "Execution timed out"
+        # line for 124/137, so no message is added here.
+        out, code_ = e.stdout or b"", 137
     if len(out) > MAX_OUTPUT:
         out = out[:MAX_OUTPUT] + b"\n... output truncated (64KB limit)"
     return code_, out

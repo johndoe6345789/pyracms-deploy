@@ -73,6 +73,15 @@ server {
         # Simply change the Container HTTP Port from the dashboard HTTP panel
         set $upstream http://<%-s.localDomain%>:<%-s.containerHttpPort%>;
 
+        # Public scheme for the apps: TLS ends at Cloudflare and the tunnel
+        # connects here over plain http, so $scheme is "http". Cloudflare
+        # sends X-Forwarded-Proto: https; pass that on (Next.js builds
+        # robots/sitemap/Open Graph URLs from it, see pyracms-cpp-port/nginx.conf).
+        set $pyracms_proto $scheme;
+        if ($http_x_forwarded_proto) {
+            set $pyracms_proto $http_x_forwarded_proto;
+        }
+
         # PyraCMS C++ backend (CapRover app pyracms-api, not exposed as a web
         # app). Mirrors pyracms-cpp-port/nginx.conf: /api/ -> backend,
         # everything else -> this app (the Next.js frontend).
@@ -90,7 +99,8 @@ server {
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
             proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Forwarded-Proto $pyracms_proto;
+            proxy_set_header X-Forwarded-Host $host;
         }
 
         location /api/ {
@@ -104,7 +114,8 @@ server {
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
             proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Forwarded-Proto $pyracms_proto;
+            proxy_set_header X-Forwarded-Host $host;
         }
 
         location / {
@@ -132,7 +143,8 @@ server {
                 proxy_set_header Host $host;
                 proxy_set_header X-Real-IP $remote_addr;
                 proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-                proxy_set_header X-Forwarded-Proto $scheme;
+                proxy_set_header X-Forwarded-Proto $pyracms_proto;
+            proxy_set_header X-Forwarded-Host $host;
 
             <%
             if (s.websocketSupport) {

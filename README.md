@@ -14,6 +14,7 @@ deployment-specific pieces.
 | `pyracms-runner` | [runner-gateway/](runner-gateway/) | no | The **only** app with `/var/run/docker.sock` |
 | `pyracms-db` | `postgres:15-alpine` | no | Persistent volume `pyracms-db-data` |
 | `pyracms-redis` | `redis:7-alpine`, 128 MB LRU, no persistence | no | Cache only |
+| `pyracms-objects` | `ghcr.io/johndoe6345789/object-store@<digest>` | no | S3-compatible store for uploaded file bytes. Persistent volume `pyracms-objects-data` → `/data/s3`; its tables live in an `objectstore` database on `pyracms-db` |
 
 Elasticsearch is not deployed: with `SEARCH_ENGINE=postgres` the backend uses
 PostgreSQL full-text search (saves ~1 GB RAM on a 1-CPU / 7 GB host).
@@ -24,8 +25,40 @@ Backend environment: `DB_HOST=srv-captain--pyracms-db`, `DB_PORT`, `DB_NAME`,
 `RUNNER_IMAGE_PREFIX=ghcr.io/johndoe6345789/pyracms-runner-`,
 `PYRACMS_ENV=production` (fatal on a weak `JWT_SECRET`, no demo seeding),
 `CORS_ALLOWED_ORIGINS=https://pyracms.pynguins.xyz,https://pyracms.wardcrew.com`,
-`PUBLIC_BASE_URL=https://pyracms.pynguins.xyz`. Secrets live in
-`~/pyracms-secrets.txt` on the host, not here.
+`PUBLIC_BASE_URL=https://pyracms.pynguins.xyz`, plus the storage settings
+below. Secrets live in `~/pyracms-secrets.txt` on the host, not here.
+
+## File storage (S3)
+
+Uploaded bytes go to the object store rather than the app's disk
+(`docs/STORAGE.md` in pyracms_core). The backend runs with:
+
+    STORAGE_BACKEND=s3
+    S3_ENDPOINT=http://srv-captain--pyracms-objects:9000
+    S3_BUCKET=pyracms            # created on first use
+    S3_ACCESS_KEY / S3_SECRET_KEY
+
+The store authenticates with `Authorization: AWS <key>:<secret>` against an
+`api_keys` row, not an env var. Its seed ships a `minioadmin/minioadmin` key:
+that row is **deleted** here and replaced with a generated one, as
+`scripts/objectstore-init.sh` advises for production.
+
+    -- in the objectstore database on pyracms-db
+    INSERT INTO api_keys (access_key, secret_key, owner, permissions)
+    VALUES (:ak, :sk, 'pyracms', 'read,write')
+    ON CONFLICT (access_key) DO UPDATE SET secret_key = EXCLUDED.secret_key;
+    DELETE FROM api_keys WHERE access_key = 'minioadmin';
+
+Keys are flat: `tenant-<siteId>-<uuid>`, where the site comes from the file's
+row and a file with no site is the platform's (site 0). The `/app/uploads`
+volume stays mounted: rows written before the switch say `storage=local` and
+are still read from disk.
+
+[scripts/test-storage.sh](scripts/test-storage.sh) checks the whole path
+(upload → `files.storage` → object in the bucket → public download → delete
+removes both → a pre-switch local file still downloads):
+
+    ./scripts/test-storage.sh ~/pyracms-secrets.txt
 
 ## Code runner: why a gateway
 

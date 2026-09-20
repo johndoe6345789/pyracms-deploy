@@ -28,10 +28,14 @@ Backend environment: `DB_HOST=srv-captain--pyracms-db`, `DB_PORT`, `DB_NAME`,
 `PUBLIC_BASE_URL=https://pyracms.pynguins.xyz`, plus the storage settings
 below. Secrets live in `~/pyracms-secrets.txt` on the host, not here.
 
-## File storage (S3)
+## File storage
 
-Uploaded bytes go to the object store rather than the app's disk
-(`docs/STORAGE.md` in pyracms_core). The backend runs with:
+**Currently `STORAGE_BACKEND=local`** (uploads on the `pyracms-api-uploads`
+volume) because of an object-store bug, see "Known issue" below. The store
+app and its key stay configured, so switching back is one variable.
+
+Uploaded bytes can go to the object store rather than the app's disk
+(`docs/STORAGE.md` in pyracms_core). To use it:
 
     STORAGE_BACKEND=s3
     S3_ENDPOINT=http://srv-captain--pyracms-objects:9000
@@ -53,6 +57,26 @@ Keys are flat: `tenant-<siteId>-<uuid>`, where the site comes from the file's
 row and a file with no site is the platform's (site 0). The `/app/uploads`
 volume stays mounted: rows written before the switch say `storage=local` and
 are still read from disk.
+
+### Known issue: object-store drops ~1 in 3 responses
+
+`object-store`'s `putObject` hands each request to a detached `std::thread`
+and calls Drogon's response callback from it
+(`server/backend/src/controllers/ObjectMutCtrl.cpp`). Roughly a third of
+requests never get a response: the blob and the `objects` row are written,
+but the connection hangs until the client gives up. PyraCMS waits
+`S3_TIMEOUT_S` (60 s) and answers "File storage is temporarily unavailable"
+(503) -- which is what gallery uploads hit.
+
+Reproduced from inside the store's own container (so not a network issue):
+9 sequential PUT/GET pairs, 3 hung for the full 10 s timeout, the rest
+answered in ~2 ms. Reads of existing objects hang the same way, so the one
+file already in S3 was copied back onto the uploads volume and its row set
+to `storage=local`.
+
+Fix belongs upstream: post the response back to the request's event loop
+(`req->getLoop()->queueInLoop(...)`) instead of calling the callback from a
+raw thread, or use Drogon's async DB API and drop the thread entirely.
 
 [scripts/test-storage.sh](scripts/test-storage.sh) checks the whole path
 (upload → `files.storage` → object in the bucket → public download → delete

@@ -28,14 +28,10 @@ Backend environment: `DB_HOST=srv-captain--pyracms-db`, `DB_PORT`, `DB_NAME`,
 `PUBLIC_BASE_URL=https://pyracms.pynguins.xyz`, plus the storage settings
 below. Secrets live in `~/pyracms-secrets.txt` on the host, not here.
 
-## File storage
+## File storage (S3)
 
-**Currently `STORAGE_BACKEND=local`** (uploads on the `pyracms-api-uploads`
-volume) because of an object-store bug, see "Known issue" below. The store
-app and its key stay configured, so switching back is one variable.
-
-Uploaded bytes can go to the object store rather than the app's disk
-(`docs/STORAGE.md` in pyracms_core). To use it:
+Uploaded bytes go to the object store rather than the app's disk
+(`docs/STORAGE.md` in pyracms_core). The backend runs with:
 
     STORAGE_BACKEND=s3
     S3_ENDPOINT=http://srv-captain--pyracms-objects:9000
@@ -58,25 +54,25 @@ row and a file with no site is the platform's (site 0). The `/app/uploads`
 volume stays mounted: rows written before the switch say `storage=local` and
 are still read from disk.
 
-### Known issue: object-store drops ~1 in 3 responses
+### The object-store bug this deployment hit (fixed upstream)
 
-`object-store`'s `putObject` hands each request to a detached `std::thread`
-and calls Drogon's response callback from it
-(`server/backend/src/controllers/ObjectMutCtrl.cpp`). Roughly a third of
-requests never get a response: the blob and the `objects` row are written,
-but the connection hangs until the client gives up. PyraCMS waits
-`S3_TIMEOUT_S` (60 s) and answers "File storage is temporarily unavailable"
-(503) -- which is what gallery uploads hit.
+Gallery uploads failed with "File storage is temporarily unavailable" (the
+backend's 503 for a store that timed out). object-store ran every handler's
+blocking work -- `execSqlSync`, blob reads and writes -- on drogon's IO loop
+threads, so a loop stuck in one query stopped answering every later
+connection: ~1 request in 3 got no response at all, `/health` included.
 
-Reproduced from inside the store's own container (so not a network issue):
-9 sequential PUT/GET pairs, 3 hung for the full 10 s timeout, the rest
-answered in ~2 ms. Reads of existing objects hang the same way, so the one
-file already in S3 was copied back onto the uploads volume and its row set
-to `storage=local`.
+Fixed in object-store
+[2643290](https://github.com/johndoe6345789/object-store/commit/2643290):
+handlers run on a worker pool and reply from there. That commit also stops a
+delete of one key removing another key's data (blobs are content-addressed,
+so identical bytes are one file), stops a missing or half-written blob being
+served as an empty 200, and stops the seed migration resurrecting the
+`minioadmin` key on every restart.
 
-Fix belongs upstream: post the response back to the request's event loop
-(`req->getLoop()->queueInLoop(...)`) instead of calling the callback from a
-raw thread, or use Drogon's async DB API and drop the thread entirely.
+The store app here runs that build. Verified after deploying it: 165
+requests with no failures (was ~30%), the storage test below passes, and 12
+gallery-sized uploads (150 KB - 1.8 MB) all succeeded.
 
 [scripts/test-storage.sh](scripts/test-storage.sh) checks the whole path
 (upload → `files.storage` → object in the bucket → public download → delete

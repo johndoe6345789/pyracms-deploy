@@ -45,11 +45,21 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 printf 'pyracms storage test %s\n' "$(date -u +%FT%TZ)" > "$tmp/payload.txt"
 want=$(sha256sum "$tmp/payload.txt" | cut -d' ' -f1)
 
-token=$(curl -sS -m 20 -A "$UA" -X POST "$SITE/api/auth/login" \
-    -H 'Content-Type: application/json' \
-    -d "{\"username\":\"${ADMIN_USERNAME:-admin}\",\"password\":\"$ADMIN_PASSWORD\"}" |
-    python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))')
-[ -n "$token" ] || fail "could not log in as ${ADMIN_USERNAME:-admin}"
+# /api/auth/login is rate limited ("Too many requests, slow down"), so a
+# couple of runs back to back would otherwise fail on an empty token.
+token=""
+for attempt in 1 2 3 4 5; do
+    body=$(curl -sS -m 20 -A "$UA" -X POST "$SITE/api/auth/login" \
+        -H 'Content-Type: application/json' \
+        -d "{\"username\":\"${ADMIN_USERNAME:-admin}\",\"password\":\"$ADMIN_PASSWORD\"}")
+    token=$(printf '%s' "$body" |
+        python3 -c 'import sys,json
+try: print(json.load(sys.stdin).get("token",""))
+except Exception: print("")')
+    [ -n "$token" ] && break
+    [ "$attempt" = 5 ] && fail "could not log in as ${ADMIN_USERNAME:-admin}: $body"
+    sleep 10
+done
 ok "logged in"
 
 up=$(curl -sS -m 60 -A "$UA" -H "Authorization: Bearer $token" \

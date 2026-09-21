@@ -15,6 +15,7 @@ deployment-specific pieces.
 | `pyracms-db` | `postgres:15-alpine` | no | Persistent volume `pyracms-db-data` |
 | `pyracms-redis` | `redis:7-alpine`, 128 MB LRU, no persistence | no | Cache only |
 | `pyracms-objects` | `ghcr.io/johndoe6345789/object-store@<digest>` | no | S3-compatible store for uploaded file bytes. Persistent volume `pyracms-objects-data` → `/data/s3`; its tables live in an `objectstore` database on `pyracms-db` |
+| `pyracms-objects-ui` | `ghcr.io/johndoe6345789/object-store-frontend@<digest>` | no | Admin UI for the store. **Not exposed** (`notExposeAsWebApp`); env `S3_BACKEND_URL=http://srv-captain--pyracms-objects:9000`. Reach it with [scripts/objects-ui-tunnel.sh](scripts/objects-ui-tunnel.sh) over SSH; sign in with the `OBJECTS_UI_*` key |
 
 Elasticsearch is not deployed: with `SEARCH_ENGINE=postgres` the backend uses
 PostgreSQL full-text search (saves ~1 GB RAM on a 1-CPU / 7 GB host).
@@ -121,3 +122,16 @@ To take new images:
 5. Deploy `runner-gateway/` to `pyracms-runner` when `gateway.py` changes. The
    app needs persistent data enabled for the host-path volume
    `/var/run/docker.sock` → `/var/run/docker.sock`.
+
+## Object store auth and big uploads
+
+- Keys live in the store's `api_keys` table (`owner`, `permissions`, exact
+  tokens `read` / `write` / `admin`) and every bucket is scoped to its key's
+  owner. There is no default key (`minioadmin` is deleted). Two keys exist:
+  the app's (`S3_ACCESS_KEY` in `~/pyracms-secrets.txt`) and a separate one
+  for the UI (`OBJECTS_UI_ACCESS_KEY`), so either can be revoked alone.
+- The store is never exposed publicly; only `pyracms-api` and the UI reach it.
+- Files over ~40 MB upload in 50 MB parts (`POST /api/files/uploads`, see
+  pyracms_core `docs/STORAGE.md`), so a 1 GB archive gets past Cloudflare's
+  100 MB request cap. The store assembles the parts on disk (cap
+  `S3_MAX_OBJECT_BYTES`, 2 GiB).

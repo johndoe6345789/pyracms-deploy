@@ -103,6 +103,24 @@ server {
             proxy_set_header X-Forwarded-Host $host;
         }
 
+        # Chunked uploads: parts of up to 50 MiB (Cloudflare caps one request
+        # body at 100 MB), streamed to the backend instead of buffered.
+        location /api/files/uploads/ {
+            set $pyracms_api http://srv-captain--pyracms-api:8080;
+            proxy_pass $pyracms_api;
+            client_max_body_size 64m;
+            client_body_timeout 300s;
+            proxy_request_buffering off;
+            proxy_read_timeout 600s;
+            proxy_send_timeout 600s;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $pyracms_proto;
+            proxy_set_header X-Forwarded-Host $host;
+        }
+
         location /api/ {
             set $pyracms_api http://srv-captain--pyracms-api:8080;
             proxy_pass $pyracms_api;

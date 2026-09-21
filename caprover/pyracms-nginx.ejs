@@ -105,7 +105,7 @@ server {
 
         # Chunked uploads: parts of up to 50 MiB (Cloudflare caps one request
         # body at 100 MB), streamed to the backend instead of buffered.
-        location /api/files/uploads/ {
+        location ~ ^/api/files/uploads(/|$) {
             set $pyracms_api http://srv-captain--pyracms-api:8080;
             proxy_pass $pyracms_api;
             client_max_body_size 64m;

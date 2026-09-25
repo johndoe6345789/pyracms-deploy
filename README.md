@@ -35,6 +35,22 @@ Create the service like this:
       -e ES_JAVA_OPTS='-Xms512m -Xmx512m' --limit-memory 1500M \
       docker.elastic.co/elasticsearch/elasticsearch:8.13.0
 
+## Scaling the API
+
+`pyracms-api` runs as **2 replicas** (`docker service scale pyracms-api=N`,
+rolling updates start the new task before stopping the old one). Each process
+runs one event-loop thread per core (`SERVER_THREADS` overrides) and keeps
+`DB_POOL_SIZE` Postgres connections (default 2 per thread, 8 to 32; keep
+replicas x pool under Postgres' `max_connections`, 100 here). Nothing else
+needs to be shared: sessions are JWTs, the cache and the search index are
+external, and live WebSocket traffic (typing, thread updates, collaborative
+editing) is relayed between replicas through Redis pub/sub (`pyracms:ws`), so
+people on different replicas still see each other. Two things stay per
+process: the login/upload rate limiters (each replica counts its own) and the
+snippet-run concurrency cap. Measured on the 6-core host: a heavy list
+endpoint went from about 420 to 540 requests/s and the 502s under 300
+concurrent clients dropped from 11,500 to 137.
+
 ## Idle connections (keepalive)
 
 Swarm's overlay VIP silently forgets a TCP flow that has been idle for about

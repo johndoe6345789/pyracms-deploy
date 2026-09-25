@@ -15,14 +15,47 @@ deployment-specific pieces.
 | `pyracms-db` | `postgres:15-alpine` | no | Persistent volume `pyracms-db-data` |
 | `pyracms-redis` | `redis:7-alpine`, 128 MB LRU, no persistence | no | Cache only |
 | `pyracms-objects` | `ghcr.io/johndoe6345789/object-store@<digest>` | no | S3-compatible store for uploaded file bytes. Persistent volume `pyracms-objects-data` → `/data/s3`; its tables live in an `objectstore` database on `pyracms-db` |
+| `pyracms-search` | `docker.elastic.co/elasticsearch/elasticsearch:8.13.0` | no | Single-node Elasticsearch (security off, 512 MB heap, 1.5 GB limit) on the overlay network as `srv-captain--pyracms-search:9200`. Persistent volume `pyracms-search-data`. Pinned to the same node as `pyracms-objects` |
 | `pyracms-objects-ui` | `ghcr.io/johndoe6345789/object-store-frontend@<digest>` | no | Admin UI for the store. **Not exposed** (`notExposeAsWebApp`); env `S3_BACKEND_URL=http://srv-captain--pyracms-objects:9000`. Reach it with [scripts/objects-ui-tunnel.sh](scripts/objects-ui-tunnel.sh) over SSH; sign in with the `OBJECTS_UI_*` key |
 
-Elasticsearch is not deployed: with `SEARCH_ENGINE=postgres` the backend uses
-PostgreSQL full-text search (saves ~1 GB RAM on a 1-CPU / 7 GB host).
+Search runs on Elasticsearch (`ELASTICSEARCH_URL=http://srv-captain--pyracms-search:9200`,
+`SEARCH_ENGINE=elasticsearch`). One index, `pyracms_content`, holds articles,
+snippets, forum posts and games. Postgres decides what is searchable (the
+`search_documents` view) and triggers queue every change in `search_outbox`;
+the API drains that into the index every 2 seconds. A missing index is created
+and filled on start, and **Admin > Search Indexing** rebuilds a site's part. If
+the cluster is unreachable the API falls back to PostgreSQL full-text search.
+Create the service like this:
+
+    docker service create --name pyracms-search \
+      --network name=captain-overlay-network,alias=srv-captain--pyracms-search \
+      --constraint 'node.id == <node of pyracms-objects>' \
+      --mount type=volume,source=pyracms-search-data,target=/usr/share/elasticsearch/data \
+      -e discovery.type=single-node -e xpack.security.enabled=false \
+      -e ES_JAVA_OPTS='-Xms512m -Xmx512m' --limit-memory 1500M \
+      docker.elastic.co/elasticsearch/elasticsearch:8.13.0
+
+## Idle connections (keepalive)
+
+Swarm's overlay VIP silently forgets a TCP flow that has been idle for about
+15 minutes, while the kernel only sends keepalive probes after 2 hours. A
+pooled connection (API to Postgres, API to the object store) then looks open
+but is dead, and the first requests after a quiet spell hang until they time
+out: uploads fail with "File storage is temporarily unavailable" and logins
+stall. `pyracms-api` and `pyracms-objects` therefore run with
+
+    docker service update \
+      --sysctl-add net.ipv4.tcp_keepalive_time=120 \
+      --sysctl-add net.ipv4.tcp_keepalive_intvl=30 \
+      --sysctl-add net.ipv4.tcp_keepalive_probes=4 <service>
+
+Give any new service that keeps long-lived connections to another service the
+same settings. (The API's S3 client also discards a connection idle for 20 s.)
 
 Backend environment: `DB_HOST=srv-captain--pyracms-db`, `DB_PORT`, `DB_NAME`,
 `DB_USER`, `DB_PASSWORD`, `JWT_SECRET`, `SERVER_HOST`, `SERVER_PORT=8080`,
-`REDIS_HOST=srv-captain--pyracms-redis`, `REDIS_PORT`, `SEARCH_ENGINE=postgres`,
+`REDIS_HOST=srv-captain--pyracms-redis`, `REDIS_PORT`, `SEARCH_ENGINE=elasticsearch`,
+`ELASTICSEARCH_URL=http://srv-captain--pyracms-search:9200`,
 `RUNNER_IMAGE_PREFIX=ghcr.io/johndoe6345789/pyracms-runner-`,
 `PYRACMS_ENV=production` (fatal on a weak `JWT_SECRET`, no demo seeding),
 `CORS_ALLOWED_ORIGINS=https://pyracms.pynguins.xyz,https://pyracms.wardcrew.com`,

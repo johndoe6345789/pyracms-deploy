@@ -99,8 +99,29 @@ public site with open registration, any account can press **Run**, so here:
   the "timed out" message). Upstream's
   `timeout 30 docker run` only kills the CLI, which leaves the container
   running.
-- It runs one sandbox at a time (single-CPU host), with a short queue, and
-  reaps orphaned sandboxes on start.
+- It runs up to `MAX_CONCURRENT` (default 4) sandboxes at once, each capped
+  at 1 CPU and 512 MB, with a short queue, and reaps orphaned sandboxes on
+  start.
+
+### Input files (snippet attachments)
+
+A snippet's attachments are its input files: the backend reads them from file
+storage, stages them with the code in a temp dir, and the shim (`--label
+pyracms.inputs=DIR` on the `docker run` argv) sends the lot to the gateway as
+one tar (`Content-Type: application/x-tar`, member `__code__` plus the files).
+The gateway checks it (regular files only, one plain path component per name,
+at most 64 files / 8 MB) and streams a tar to the sandbox's stdin:
+
+- **Python** (`python3 -c`): the gateway passes a short preamble as the code;
+  it unpacks the tar into `/tmp`, `chdir`s there and `exec`s `__code__` as
+  `__main__`, so tracebacks and exit codes look like a normal run.
+- **C / C++**: the entrypoints (`docker/c`, `docker/cpp` in pyracms_core)
+  `tar -x` into `/tmp` when `PYRACMS_INPUTS=1` and run from there.
+- Other languages run as before, without the files.
+
+`/tmp` (the only writable place, a 256 MB tmpfs) is the working directory, so
+a script can also *write* a file. Nothing else about the sandbox changes: no
+network, read-only root, no capabilities.
 
 So a compromised backend can do no more than any site user already can.
 

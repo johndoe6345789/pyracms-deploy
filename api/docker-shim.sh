@@ -9,10 +9,26 @@
 eval "image=\${$(($# - 1))}"
 eval "code=\${$#}"
 
+# A run with input files (a snippet's attachments) carries the directory the
+# backend staged them in as `--label pyracms.inputs=DIR`; DIR also holds the
+# code, as __code__. Send all of it as one tar; plain runs send the code.
+inputs=""; prev=""
+for a in "$@"; do
+    [ "$prev" = "--label" ] && case "$a" in
+        pyracms.inputs=/tmp/pyracms-run-*) inputs=${a#pyracms.inputs=} ;;
+    esac
+    prev=$a
+done
+
+url="${RUNNER_GATEWAY_URL:-http://srv-captain--pyracms-runner:8080}/run?image=$image"
 hdr=$(mktemp)
-printf '%s' "$code" | curl -sS -m 29 -D "$hdr" --data-binary @- \
-    -H 'Content-Type: text/plain; charset=utf-8' \
-    "${RUNNER_GATEWAY_URL:-http://srv-captain--pyracms-runner:8080}/run?image=$image"
+if [ -n "$inputs" ] && [ -f "$inputs/__code__" ]; then
+    tar -C "$inputs" -cf - . | curl -sS -m 29 -D "$hdr" --data-binary @- \
+        -H 'Content-Type: application/x-tar' "$url"
+else
+    printf '%s' "$code" | curl -sS -m 29 -D "$hdr" --data-binary @- \
+        -H 'Content-Type: text/plain; charset=utf-8' "$url"
+fi
 rc=$?
 ec=$(tr -d '\r' < "$hdr" | awk 'tolower($1)=="x-exit-code:" {print $2}')
 rm -f "$hdr"

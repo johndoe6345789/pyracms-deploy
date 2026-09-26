@@ -35,6 +35,16 @@ Create the service like this:
       -e ES_JAVA_OPTS='-Xms512m -Xmx512m' --limit-memory 1500M \
       docker.elastic.co/elasticsearch/elasticsearch:8.13.0
 
+## Upload size
+
+Files over 40 MB go up in 50 MB parts (S3 multipart) and can be as large as
+`MAX_CHUNKED_UPLOAD_MB` allows: **10240** (10 GiB, the code's ceiling) on the
+live `pyracms-api` service, set with
+`docker service update --env-add MAX_CHUNKED_UPLOAD_MB=10240 pyracms-api`
+(the code default is 1024). `MAX_UPLOAD_MB` (25) only bounds ordinary
+request bodies. Keep the object store's disk in mind: a 10 GiB file needs
+10 GiB free while it is assembled.
+
 ## Scaling the API
 
 `pyracms-api` runs as **2 replicas** (`docker service scale pyracms-api=N`,
